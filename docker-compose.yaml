@@ -1,0 +1,38 @@
+services:
+  # docker-socket-proxy sits between the bot and the host Docker socket and only
+  # forwards the API calls the bot needs (exec into existing containers), so a
+  # compromise of the bot can't create containers or touch other daemon state.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    container_name: docker-socket-proxy
+    restart: unless-stopped
+    privileged: true
+    environment:
+      # /containers/* (needed for POST /containers/{id}/exec)
+      CONTAINERS: "1"
+      # /exec/* (start and inspect exec instances)
+      EXEC: "1"
+      # POST is off by default, but docker exec needs POST requests.
+      POST: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  dms-admin-bot:
+    build: .
+    image: ghcr.io/dtlp/dms-admin-bot:latest
+    container_name: dms-admin-bot
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      - docker-socket-proxy
+    environment:
+      # Talk to the proxy instead of the host socket directly.
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      BOT_TOKEN: ${BOT_TOKEN:?BOT_TOKEN is required}
+      BOT_USER_ID: ${BOT_USER_ID:?BOT_USER_ID is required}
+      MAIL_CONTAINER: ${MAIL_CONTAINER:?MAIL_CONTAINER is required}
+      MAIL_DOMAIN: ${MAIL_DOMAIN:?MAIL_DOMAIN is required}
