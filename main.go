@@ -198,6 +198,26 @@ func mailboxExists(addr string) (bool, error) {
 	return false, nil
 }
 
+// mappingExists reports whether aliasAddr forwards to mailboxAddr, so callers
+// can avoid offering to delete a mapping that is not there.
+func mappingExists(aliasAddr, mailboxAddr string) (bool, error) {
+	aliases, err := readAliases()
+	if err != nil {
+		return false, err
+	}
+	for _, a := range aliases {
+		if !strings.EqualFold(a.address, aliasAddr) {
+			continue
+		}
+		for _, r := range a.recipients {
+			if strings.EqualFold(r, mailboxAddr) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	if !authorized(msg.From) {
 		logUnauthorized(msg.From)
@@ -278,6 +298,14 @@ func aliasDelete(bot *tgbotapi.BotAPI, chatID int64, args string) {
 	}
 
 	aliasAddr := fmt.Sprintf("%s@%s", aliasLocal, cfg.mailDomain)
+
+	if exists, err := mappingExists(aliasAddr, mailboxAddr); err != nil {
+		sendText(bot, chatID, "Failed to read aliases:\n<code>"+escape(err.Error())+"</code>")
+		return
+	} else if !exists {
+		sendText(bot, chatID, fmt.Sprintf("<b>%s</b> → <b>%s</b> does not exist.", escape(aliasAddr), escape(mailboxAddr)))
+		return
+	}
 
 	row := tgbotapi.NewInlineKeyboardRow(
 		tgbotapi.NewInlineKeyboardButtonData("✅ Yes, delete", "confirm_del"),

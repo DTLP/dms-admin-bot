@@ -266,6 +266,35 @@ func TestMailboxExistsMissingDatabase(t *testing.T) {
 	}
 }
 
+func TestMappingExists(t *testing.T) {
+	aliases := "support@example.com admin@example.com\n" +
+		"sales@example.com jane@example.com, admin@example.com\n"
+	tests := []struct {
+		name    string
+		alias   string
+		mailbox string
+		want    bool
+	}{
+		{name: "direct", alias: "support@example.com", mailbox: "admin@example.com", want: true},
+		{name: "second recipient", alias: "sales@example.com", mailbox: "admin@example.com", want: true},
+		{name: "case insensitive", alias: "Support@Example.com", mailbox: "Admin@Example.com", want: true},
+		{name: "wrong recipient", alias: "support@example.com", mailbox: "jane@example.com", want: false},
+		{name: "unknown alias", alias: "ghost@example.com", mailbox: "admin@example.com", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeDockerExec(t, "", aliases, false)
+			got, err := mappingExists(tt.alias, tt.mailbox)
+			if err != nil {
+				t.Fatalf("mappingExists(%q, %q) error = %v", tt.alias, tt.mailbox, err)
+			}
+			if got != tt.want {
+				t.Errorf("mappingExists(%q, %q) = %v, want %v", tt.alias, tt.mailbox, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeEmail(t *testing.T) {
 	tests := []struct {
 		in   string
