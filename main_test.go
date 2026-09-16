@@ -168,3 +168,100 @@ func TestClamp(t *testing.T) {
 		}
 	}
 }
+
+// fakeDockerExec replaces dockerExec for the duration of a test. It returns
+// canned output based on which database the command touches, so tests can
+// simulate the account and alias files independently.
+func fakeDockerExec(t *testing.T, accounts, aliases string, accountsMissing bool) {
+	t.Helper()
+	saved := dockerExec
+	t.Cleanup(func() { dockerExec = saved })
+	dockerExec = func(args ...string) (string, error) {
+		cmd := strings.Join(args, " ")
+		switch {
+		case strings.Contains(cmd, accountsFile):
+			if accountsMissing {
+				return "", fmt.Errorf("exit status 1")
+			}
+			return accounts, nil
+		case strings.Contains(cmd, aliasFile):
+			return aliases, nil
+		default:
+			return "", fmt.Errorf("unexpected command: %s", cmd)
+		}
+	}
+}
+
+func TestReadAccounts(t *testing.T) {
+	fakeDockerExec(t, "admin@example.com|{SHA512-CRYPT}abc\n# comment\nJane@Example.com|xyz\n", "", false)
+	got, err := readAccounts()
+	if err != nil {
+		t.Fatalf("readAccounts() error = %v", err)
+	}
+	want := map[string]bool{"admin@example.com": true, "jane@example.com": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("readAccounts() = %#v, want %#v", got, want)
+	}
+}
+
+func TestReadAccountsMissingFile(t *testing.T) {
+	fakeDockerExec(t, "", "", true)
+	if _, err := readAccounts(); err == nil {
+		t.Error("readAccounts() error = nil, want error for missing database")
+	}
+}
+
+func TestMailboxExists(t *testing.T) {
+	tests := []struct {
+		name     string
+		accounts string
+		aliases  string
+		addr     string
+		want     bool
+	}{
+		{
+			name:     "account",
+			accounts: "admin@example.com|hash\n",
+			addr:     "admin@example.com",
+			want:     true,
+		},
+		{
+			name:    "alias chain",
+			aliases: "sales@example.com admin@example.com\n",
+			addr:    "sales@example.com",
+			want:    true,
+		},
+		{
+			name:    "case insensitive",
+			aliases: "Sales@Example.com admin@example.com\n",
+			addr:    "sales@example.com",
+			want:    true,
+		},
+		{
+			name:     "neither",
+			accounts: "admin@example.com|hash\n",
+			aliases:  "sales@example.com admin@example.com\n",
+			addr:     "ghost@example.com",
+			want:     false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeDockerExec(t, tt.accounts, tt.aliases, false)
+			got, err := mailboxExists(tt.addr)
+			if err != nil {
+				t.Fatalf("mailboxExists(%q) error = %v", tt.addr, err)
+			}
+			if got != tt.want {
+				t.Errorf("mailboxExists(%q) = %v, want %v", tt.addr, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMailboxExistsMissingDatabase(t *testing.T) {
+	fakeDockerExec(t, "", "", true)
+	if _, err := mailboxExists("admin@example.com"); err == nil {
+		t.Error("mailboxExists() error = nil, want error for missing database")
+	}
+}

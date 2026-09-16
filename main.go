@@ -26,6 +26,10 @@ const (
 	// container. Reading it directly avoids depending on `setup alias list`
 	// output formatting, which varies between docker-mailserver versions.
 	aliasFile = "/tmp/docker-mailserver/postfix-virtual.cf"
+	// accountsFile is the docker-mailserver mailbox account database inside
+	// the container. aliasAdd reads it to refuse aliases whose target is
+	// neither a real mailbox nor another alias.
+	accountsFile = "/tmp/docker-mailserver/postfix-accounts.cf"
 )
 
 type config struct {
@@ -145,6 +149,51 @@ func readAliases() ([]alias, error) {
 	return parseAliases(out), nil
 }
 
+// readAccounts returns the set of mailbox addresses in the container's
+// account database. It fails closed: a missing database is an error rather
+// than "no mailboxes", because then no alias target could be verified.
+func readAccounts() (map[string]bool, error) {
+	out, err := dockerExec("sh", "-c", "test -f "+accountsFile+" && cat "+accountsFile)
+	if err != nil {
+		return nil, fmt.Errorf("mailbox database %s not found in container", accountsFile)
+	}
+	accounts := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if i := strings.Index(line, "|"); i != -1 {
+			line = line[:i]
+		}
+		accounts[strings.ToLower(strings.TrimSpace(line))] = true
+	}
+	return accounts, nil
+}
+
+// mailboxExists reports whether addr is a valid alias target: a real mailbox
+// account or another alias. Both resolve through Postfix, which follows
+// alias chains, so either is safe to forward to.
+func mailboxExists(addr string) (bool, error) {
+	accounts, err := readAccounts()
+	if err != nil {
+		return false, err
+	}
+	if accounts[strings.ToLower(addr)] {
+		return true, nil
+	}
+	aliases, err := readAliases()
+	if err != nil {
+		return false, err
+	}
+	for _, a := range aliases {
+		if strings.EqualFold(a.address, addr) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	if !authorized(msg.From) {
 		logUnauthorized(msg.From)
@@ -189,6 +238,14 @@ func aliasAdd(bot *tgbotapi.BotAPI, chatID int64, args string) {
 
 	aliasAddr := fmt.Sprintf("%s@%s", aliasLocal, cfg.mailDomain)
 	mailboxAddr := fmt.Sprintf("%s@%s", mailbox, cfg.mailDomain)
+
+	if exists, err := mailboxExists(mailboxAddr); err != nil {
+		sendText(bot, chatID, "Failed to verify <b>"+escape(mailboxAddr)+"</b>:\n<code>"+escape(err.Error())+"</code>")
+		return
+	} else if !exists {
+		sendText(bot, chatID, "Mailbox <b>"+escape(mailboxAddr)+"</b> does not exist. Create the account or alias first.")
+		return
+	}
 
 	if out, err := setup("alias", "add", aliasAddr, mailboxAddr); err != nil {
 		sendText(bot, chatID, "Failed to add alias:\n<code>"+escape(out)+"</code>")
