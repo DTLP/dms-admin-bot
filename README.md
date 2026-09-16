@@ -24,11 +24,13 @@ Because the bot only makes outbound connections to the Telegram API
 | Command                           | Action                                                            |
 | --------------------------------- | ----------------------------------------------------------------- |
 | `/alias_list [mailbox]`           | List aliases (sorted, paginated), optionally only for one mailbox |
-| `/alias_add <alias> <mailbox>`    | Add `alias@domain` → `mailbox@domain`                             |
+| `/alias_add <alias> <mailbox>`    | Add `alias@domain` → `mailbox`                                    |
 | `/alias_delete <alias> <mailbox>` | Remove an alias → mailbox mapping (asks for confirmation)         |
 
-`alias` and `mailbox` are the local parts of the addresses; the domain is
-appended from `MAIL_DOMAIN`. For example, with `MAIL_CONTAINER=mail`, `/alias_add
+`alias` is the local part of an address; the domain is appended from
+`MAIL_DOMAIN`. `mailbox` is either a local part (an existing account or alias,
+which is verified before adding) or a full external address such as
+`someone@external.example`. For example, with `MAIL_CONTAINER=mail`, `/alias_add
 support admin` is equivalent to:
 
 ```sh

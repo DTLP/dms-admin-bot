@@ -55,6 +55,10 @@ var (
 	// localPartRe matches the local part of an email address before the "@".
 	localPartRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
+	// domainRe matches a mail domain, one or more dot-separated labels. It is
+	// used to validate external addresses given to /alias_add in full form.
+	domainRe = regexp.MustCompile(`^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$`)
+
 	// dockerExec runs a command inside the mail container. It is a variable so
 	// tests can substitute a fake.
 	dockerExec = func(args ...string) (string, error) {
@@ -230,21 +234,22 @@ func aliasAdd(bot *tgbotapi.BotAPI, chatID int64, args string) {
 		sendText(bot, chatID, "Invalid alias: "+err.Error())
 		return
 	}
-	mailbox, err := normalizeLocalPart(fields[1])
+	mailboxAddr, local, err := resolveMailbox(fields[1])
 	if err != nil {
 		sendText(bot, chatID, "Invalid mailbox: "+err.Error())
 		return
 	}
 
 	aliasAddr := fmt.Sprintf("%s@%s", aliasLocal, cfg.mailDomain)
-	mailboxAddr := fmt.Sprintf("%s@%s", mailbox, cfg.mailDomain)
 
-	if exists, err := mailboxExists(mailboxAddr); err != nil {
-		sendText(bot, chatID, "Failed to verify <b>"+escape(mailboxAddr)+"</b>:\n<code>"+escape(err.Error())+"</code>")
-		return
-	} else if !exists {
-		sendText(bot, chatID, "Mailbox <b>"+escape(mailboxAddr)+"</b> does not exist. Create the account or alias first.")
-		return
+	if local {
+		if exists, err := mailboxExists(mailboxAddr); err != nil {
+			sendText(bot, chatID, "Failed to verify <b>"+escape(mailboxAddr)+"</b>:\n<code>"+escape(err.Error())+"</code>")
+			return
+		} else if !exists {
+			sendText(bot, chatID, "Mailbox <b>"+escape(mailboxAddr)+"</b> does not exist. Create the account or alias first.")
+			return
+		}
 	}
 
 	if out, err := setup("alias", "add", aliasAddr, mailboxAddr); err != nil {
@@ -266,14 +271,13 @@ func aliasDelete(bot *tgbotapi.BotAPI, chatID int64, args string) {
 		sendText(bot, chatID, "Invalid alias: "+err.Error())
 		return
 	}
-	mailbox, err := normalizeLocalPart(fields[1])
+	mailboxAddr, _, err := resolveMailbox(fields[1])
 	if err != nil {
 		sendText(bot, chatID, "Invalid mailbox: "+err.Error())
 		return
 	}
 
 	aliasAddr := fmt.Sprintf("%s@%s", aliasLocal, cfg.mailDomain)
-	mailboxAddr := fmt.Sprintf("%s@%s", mailbox, cfg.mailDomain)
 
 	row := tgbotapi.NewInlineKeyboardRow(
 		tgbotapi.NewInlineKeyboardButtonData("✅ Yes, delete", "confirm_del"),
@@ -298,7 +302,7 @@ func aliasList(bot *tgbotapi.BotAPI, chatID int64, args string) {
 	filter := strings.TrimSpace(args)
 	if filter != "" {
 		var err error
-		if filter, err = normalizeLocalPart(filter); err != nil {
+		if filter, err = normalizeFilter(filter); err != nil {
 			sendText(bot, chatID, "Invalid mailbox: "+err.Error())
 			return
 		}
@@ -403,16 +407,19 @@ func storeFilter(messageID int, filter string) {
 	listFilters[messageID] = filter
 }
 
-// filterAliases keeps only aliases that forward to the given mailbox local part.
-func filterAliases(aliases []alias, mailbox string) []alias {
+// filterAliases keeps only aliases that forward to the given mailbox. The
+// filter is either a local part (matches any domain) or a full email address.
+func filterAliases(aliases []alias, filter string) []alias {
+	filter = strings.ToLower(filter)
 	var filtered []alias
 	for _, a := range aliases {
 		for _, r := range a.recipients {
-			local := strings.ToLower(r)
+			recipient := strings.ToLower(r)
+			local := recipient
 			if i := strings.Index(local, "@"); i != -1 {
 				local = local[:i]
 			}
-			if local == mailbox {
+			if recipient == filter || local == filter {
 				filtered = append(filtered, a)
 				break
 			}
@@ -515,6 +522,50 @@ func normalizeLocalPart(arg string) (string, error) {
 	return arg, nil
 }
 
+// normalizeEmail validates and lowercases a full email address.
+func normalizeEmail(arg string) (string, error) {
+	arg = strings.TrimSpace(strings.ToLower(arg))
+	if strings.Count(arg, "@") != 1 {
+		return "", fmt.Errorf("invalid email address %q", arg)
+	}
+	local, domain, _ := strings.Cut(arg, "@")
+	if !localPartRe.MatchString(local) || !domainRe.MatchString(domain) {
+		return "", fmt.Errorf("invalid email address %q", arg)
+	}
+	return arg, nil
+}
+
+// resolveMailbox turns a /alias_add or /alias_delete mailbox argument into a
+// full address. A bare local part means a mailbox on MAIL_DOMAIN (local=true);
+// a full address is used as-is, and local is true only when its domain is
+// MAIL_DOMAIN, so callers can skip the existence check for external targets.
+func resolveMailbox(arg string) (addr string, local bool, err error) {
+	arg = strings.TrimSpace(strings.ToLower(arg))
+	if strings.Contains(arg, "@") {
+		addr, err = normalizeEmail(arg)
+		if err != nil {
+			return "", false, err
+		}
+		_, domain, _ := strings.Cut(addr, "@")
+		return addr, strings.EqualFold(domain, cfg.mailDomain), nil
+	}
+	localPart, err := normalizeLocalPart(arg)
+	if err != nil {
+		return "", false, err
+	}
+	return fmt.Sprintf("%s@%s", localPart, cfg.mailDomain), true, nil
+}
+
+// normalizeFilter validates a /alias_list mailbox filter, which is either a
+// local part or a full email address.
+func normalizeFilter(arg string) (string, error) {
+	arg = strings.TrimSpace(strings.ToLower(arg))
+	if strings.Contains(arg, "@") {
+		return normalizeEmail(arg)
+	}
+	return normalizeLocalPart(arg)
+}
+
 func authorized(u *tgbotapi.User) bool {
 	return u != nil && u.ID == cfg.userID
 }
@@ -587,8 +638,12 @@ Commands:
 /alias_add &lt;alias&gt; &lt;mailbox&gt; — create an alias → mailbox
 /alias_delete &lt;alias&gt; &lt;mailbox&gt; — remove an alias → mailbox mapping (asks for confirmation)
 
+&lt;mailbox&gt; is a local part (e.g. admin) or a full external address
+(e.g. someone@external.example).
+
 Examples:
 /alias_add support admin     → support@%s → admin@%s
+/alias_add support someone@external.example
 /alias_delete support admin
 `,
 		appName,

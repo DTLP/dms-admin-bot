@@ -265,3 +265,99 @@ func TestMailboxExistsMissingDatabase(t *testing.T) {
 		t.Error("mailboxExists() error = nil, want error for missing database")
 	}
 }
+
+func TestNormalizeEmail(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+		ok   bool
+	}{
+		{in: "someone@external.example", want: "someone@external.example", ok: true},
+		{in: "A.B@Sub.Example.com", want: "a.b@sub.example.com", ok: true},
+		{in: "no-at-sign", ok: false},
+		{in: "a@b@c", ok: false},
+		{in: "x@.com", ok: false},
+		{in: "x@", ok: false},
+	}
+	for _, tt := range tests {
+		got, err := normalizeEmail(tt.in)
+		if (err == nil) != tt.ok {
+			t.Errorf("normalizeEmail(%q) error = %v, want ok=%v", tt.in, err, tt.ok)
+			continue
+		}
+		if err == nil && got != tt.want {
+			t.Errorf("normalizeEmail(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestResolveMailbox(t *testing.T) {
+	saved := cfg.mailDomain
+	cfg.mailDomain = "example.com"
+	t.Cleanup(func() { cfg.mailDomain = saved })
+
+	tests := []struct {
+		in        string
+		wantAddr  string
+		wantLocal bool
+		ok        bool
+	}{
+		{in: "admin", wantAddr: "admin@example.com", wantLocal: true, ok: true},
+		{in: "Admin@Example.com", wantAddr: "admin@example.com", wantLocal: true, ok: true},
+		{in: "someone@external.example", wantAddr: "someone@external.example", wantLocal: false, ok: true},
+		{in: "someone@example.com", wantAddr: "someone@example.com", wantLocal: true, ok: true},
+		{in: "Someone@EXAMPLE.com", wantAddr: "someone@example.com", wantLocal: true, ok: true},
+		{in: "a@b@c", ok: false},
+		{in: "bad space", ok: false},
+		{in: "x@", ok: false},
+		{in: "@x.com", ok: false},
+		{in: "x@.com", ok: false},
+	}
+	for _, tt := range tests {
+		addr, local, err := resolveMailbox(tt.in)
+		if (err == nil) != tt.ok {
+			t.Errorf("resolveMailbox(%q) error = %v, want ok=%v", tt.in, err, tt.ok)
+			continue
+		}
+		if err == nil && (addr != tt.wantAddr || local != tt.wantLocal) {
+			t.Errorf("resolveMailbox(%q) = %q, local=%v; want %q, local=%v", tt.in, addr, local, tt.wantAddr, tt.wantLocal)
+		}
+	}
+}
+
+func TestNormalizeFilter(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+		ok   bool
+	}{
+		{in: "admin", want: "admin", ok: true},
+		{in: "someone@external.example", want: "someone@external.example", ok: true},
+		{in: "Someone@EXTERNAL.example", want: "someone@external.example", ok: true},
+		{in: "bad bad", ok: false},
+		{in: "x@y@z", ok: false},
+	}
+	for _, tt := range tests {
+		got, err := normalizeFilter(tt.in)
+		if (err == nil) != tt.ok {
+			t.Errorf("normalizeFilter(%q) error = %v, want ok=%v", tt.in, err, tt.ok)
+			continue
+		}
+		if err == nil && got != tt.want {
+			t.Errorf("normalizeFilter(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestFilterAliasesFullAddress(t *testing.T) {
+	aliases := []alias{
+		{address: "a@example.com", recipients: []string{"someone@external.example"}},
+		{address: "b@example.com", recipients: []string{"someone@external.example", "admin@example.com"}},
+		{address: "c@example.com", recipients: []string{"other@outlook.com"}},
+	}
+	got := filterAliases(aliases, "someone@external.example")
+	want := []alias{aliases[0], aliases[1]}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("filterAliases() = %#v, want %#v", got, want)
+	}
+}
