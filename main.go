@@ -226,6 +226,7 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	if !msg.IsCommand() {
 		return
 	}
+	audit(msg.From.ID, "command=%s args=%q", msg.Command(), msg.CommandArguments())
 	switch msg.Command() {
 	case "start":
 		sendText(bot, msg.Chat.ID, welcomeText())
@@ -234,15 +235,15 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	case "alias_list":
 		aliasList(bot, msg.Chat.ID, msg.CommandArguments())
 	case "alias_add":
-		aliasAdd(bot, msg.Chat.ID, msg.CommandArguments())
+		aliasAdd(bot, msg.Chat.ID, msg.From.ID, msg.CommandArguments())
 	case "alias_delete":
-		aliasDelete(bot, msg.Chat.ID, msg.CommandArguments())
+		aliasDelete(bot, msg.Chat.ID, msg.From.ID, msg.CommandArguments())
 	default:
 		sendText(bot, msg.Chat.ID, "Unknown command.\n"+helpText())
 	}
 }
 
-func aliasAdd(bot *tgbotapi.BotAPI, chatID int64, args string) {
+func aliasAdd(bot *tgbotapi.BotAPI, chatID, userID int64, args string) {
 	fields := strings.Fields(args)
 	if len(fields) != 2 {
 		sendText(bot, chatID, "Usage: /alias_add &lt;alias&gt; &lt;mailbox&gt;")
@@ -276,10 +277,11 @@ func aliasAdd(bot *tgbotapi.BotAPI, chatID int64, args string) {
 		sendText(bot, chatID, "Failed to add alias:\n<code>"+escape(out)+"</code>")
 		return
 	}
+	audit(userID, "alias_add alias=%s mailbox=%s", aliasAddr, mailboxAddr)
 	sendText(bot, chatID, fmt.Sprintf("Added <b>%s</b> → <b>%s</b>", escape(aliasAddr), escape(mailboxAddr)))
 }
 
-func aliasDelete(bot *tgbotapi.BotAPI, chatID int64, args string) {
+func aliasDelete(bot *tgbotapi.BotAPI, chatID, userID int64, args string) {
 	fields := strings.Fields(args)
 	if len(fields) != 2 {
 		sendText(bot, chatID, "Usage: /alias_delete &lt;alias&gt; &lt;mailbox&gt;")
@@ -324,6 +326,7 @@ func aliasDelete(bot *tgbotapi.BotAPI, chatID int64, args string) {
 		pendingDelete = map[int]deleteRequest{}
 	}
 	pendingDelete[sent.MessageID] = deleteRequest{aliasAddr: aliasAddr, mailboxAddr: mailboxAddr}
+	audit(userID, "alias_delete_request alias=%s mailbox=%s", aliasAddr, mailboxAddr)
 }
 
 func aliasList(bot *tgbotapi.BotAPI, chatID int64, args string) {
@@ -523,6 +526,7 @@ func confirmDelete(bot *tgbotapi.BotAPI, cb *tgbotapi.CallbackQuery) {
 		editText(bot, cb, "Failed to delete <b>"+escape(req.aliasAddr)+"</b>:\n<code>"+escape(out)+"</code>")
 		return
 	}
+	audit(cb.From.ID, "alias_delete alias=%s mailbox=%s", req.aliasAddr, req.mailboxAddr)
 	editText(bot, cb, "Deleted <b>"+escape(req.aliasAddr)+"</b> → <b>"+escape(req.mailboxAddr)+"</b>")
 }
 
@@ -596,6 +600,12 @@ func normalizeFilter(arg string) (string, error) {
 
 func authorized(u *tgbotapi.User) bool {
 	return u != nil && u.ID == cfg.userID
+}
+
+// audit logs an audited action together with the actor's Telegram user id. The
+// standard log package prepends a date and time to every line.
+func audit(userID int64, format string, args ...any) {
+	log.Printf(fmt.Sprintf("audit user=%d "+format, userID), args...)
 }
 
 // logUnauthorized records an ignored message. Log output is throttled per user
