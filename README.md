@@ -65,8 +65,15 @@ that socket is effectively full control of Docker on the machine. So it matters
 who gets it:
 
 - **With the socket proxy (recommended):** the bot talks to a small helper
-  container that only lets it run commands inside your existing mail container.
-  It cannot start, stop, or create containers.
+  container that forwards a limited set of Docker API calls. The shipped
+  configuration still grants the bot *write* access to container endpoints: it
+  can create containers from images already on the host, run commands inside
+  any container (not just the mail one), attach to running containers, and
+  write files into a container's filesystem. It cannot stop, start, restart,
+  pause, or remove containers, and it cannot touch images, networks, or
+  volumes. This is narrower than the raw socket, but it is still dangerous: if
+  the bot is compromised, an attacker can run commands inside any container on
+  the host. Treat the bot itself as a highly privileged process.
 - **Without the proxy (simplest):** the bot gets direct access to the Docker
   socket. If the bot is ever compromised, so is the whole server. One command to
   run, but only do this if you accept that risk.
