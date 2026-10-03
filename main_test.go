@@ -354,6 +354,68 @@ func TestResolveMailbox(t *testing.T) {
 	}
 }
 
+func TestMailboxArg(t *testing.T) {
+	saved := cfg.defaultMailbox
+	t.Cleanup(func() { cfg.defaultMailbox = saved })
+
+	cfg.defaultMailbox = "admin@example.com"
+	if got := mailboxArg([]string{"support", "jane@example.com"}); got != "jane@example.com" {
+		t.Errorf("mailboxArg with explicit mailbox = %q, want %q", got, "jane@example.com")
+	}
+	if got := mailboxArg([]string{"support"}); got != "admin@example.com" {
+		t.Errorf("mailboxArg without mailbox = %q, want default %q", got, "admin@example.com")
+	}
+
+	cfg.defaultMailbox = ""
+	if got := mailboxArg([]string{"support"}); got != "" {
+		t.Errorf("mailboxArg without default = %q, want empty", got)
+	}
+}
+
+func TestListFilter(t *testing.T) {
+	saved := cfg.defaultMailbox
+	t.Cleanup(func() { cfg.defaultMailbox = saved })
+
+	cfg.defaultMailbox = "admin@example.com"
+	if got := listFilter(""); got != "admin@example.com" {
+		t.Errorf("listFilter(\"\") = %q, want default %q", got, "admin@example.com")
+	}
+	if got := listFilter("*"); got != "" {
+		t.Errorf("listFilter(\"*\") = %q, want empty (all)", got)
+	}
+	if got := listFilter("jane"); got != "jane" {
+		t.Errorf("listFilter(\"jane\") = %q, want %q", got, "jane")
+	}
+
+	cfg.defaultMailbox = ""
+	if got := listFilter(""); got != "" {
+		t.Errorf("listFilter(\"\") without default = %q, want empty (all)", got)
+	}
+}
+
+func TestLoadConfigDefaultMailbox(t *testing.T) {
+	saved := cfg
+	t.Cleanup(func() { cfg = saved })
+
+	t.Setenv("BOT_TOKEN", "token")
+	t.Setenv("MAIL_CONTAINER", "mail")
+	t.Setenv("MAIL_DOMAIN", "example.com")
+	t.Setenv("BOT_USER_ID", "42")
+
+	t.Setenv("DEFAULT_MAILBOX", "Admin@Example.com")
+	if err := loadConfig(); err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if cfg.defaultMailbox != "admin@example.com" {
+		t.Errorf("defaultMailbox = %q, want %q", cfg.defaultMailbox, "admin@example.com")
+	}
+
+	t.Setenv("DEFAULT_MAILBOX", "bad bad")
+	if err := loadConfig(); err == nil {
+		t.Error("loadConfig() error = nil, want error for invalid DEFAULT_MAILBOX")
+	}
+}
+
 func TestNormalizeFilter(t *testing.T) {
 	tests := []struct {
 		in   string

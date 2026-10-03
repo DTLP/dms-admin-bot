@@ -35,4 +35,4 @@ deploy:
 	@test -n "$$MAIL_DOMAIN" || (echo "MAIL_DOMAIN is required"; exit 1)
 	ssh -i $(SSH_KEY) $(SSH_USER)@$(MAIL_HOST) mkdir -p $(REMOTE_DIR)
 	scp -i $(SSH_KEY) docker-compose.yaml $(SSH_USER)@$(MAIL_HOST):$(REMOTE_DIR)/
-	ssh -i $(SSH_KEY) $(SSH_USER)@$(MAIL_HOST) "cd $(REMOTE_DIR) && rm -f docker-compose.yml && export BOT_TOKEN='$$BOT_TOKEN' BOT_USER_ID='$$BOT_USER_ID' MAIL_CONTAINER='$$MAIL_CONTAINER' MAIL_DOMAIN='$$MAIL_DOMAIN' && docker compose -f docker-compose.yaml pull && docker compose -f docker-compose.yaml up -d"
+	ssh -i $(SSH_KEY) $(SSH_USER)@$(MAIL_HOST) "cd $(REMOTE_DIR) && rm -f docker-compose.yml && export BOT_TOKEN='$$BOT_TOKEN' BOT_USER_ID='$$BOT_USER_ID' MAIL_CONTAINER='$$MAIL_CONTAINER' MAIL_DOMAIN='$$MAIL_DOMAIN' DEFAULT_MAILBOX='$$DEFAULT_MAILBOX' && docker compose -f docker-compose.yaml pull && docker compose -f docker-compose.yaml up -d"

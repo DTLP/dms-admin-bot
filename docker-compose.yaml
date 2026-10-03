@@ -36,3 +36,4 @@ services:
       BOT_USER_ID: ${BOT_USER_ID:?BOT_USER_ID is required}
       MAIL_CONTAINER: ${MAIL_CONTAINER:?MAIL_CONTAINER is required}
       MAIL_DOMAIN: ${MAIL_DOMAIN:?MAIL_DOMAIN is required}
+      DEFAULT_MAILBOX: ${DEFAULT_MAILBOX:-}

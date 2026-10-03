@@ -33,10 +33,11 @@ const (
 )
 
 type config struct {
-	token         string
-	userID        int64
-	mailContainer string
-	mailDomain    string
+	token          string
+	userID         int64
+	mailContainer  string
+	mailDomain     string
+	defaultMailbox string
 }
 
 type alias struct {
@@ -127,6 +128,14 @@ func loadConfig() error {
 	}
 	if cfg.mailDomain == "" {
 		return fmt.Errorf("MAIL_DOMAIN is required")
+	}
+	cfg.defaultMailbox = ""
+	if raw := strings.TrimSpace(os.Getenv("DEFAULT_MAILBOX")); raw != "" {
+		addr, _, err := resolveMailbox(raw)
+		if err != nil {
+			return fmt.Errorf("DEFAULT_MAILBOX: %w", err)
+		}
+		cfg.defaultMailbox = addr
 	}
 	cfg.userID, err = strconv.ParseInt(strings.TrimSpace(os.Getenv("BOT_USER_ID")), 10, 64)
 	if err != nil {
@@ -245,8 +254,8 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 
 func aliasAdd(bot *tgbotapi.BotAPI, chatID, userID int64, args string) {
 	fields := strings.Fields(args)
-	if len(fields) != 2 {
-		sendText(bot, chatID, "Usage: /alias_add &lt;alias&gt; &lt;mailbox&gt;")
+	if len(fields) < 1 || len(fields) > 2 {
+		sendText(bot, chatID, "Usage: /alias_add &lt;alias&gt; [mailbox]")
 		return
 	}
 
@@ -255,7 +264,12 @@ func aliasAdd(bot *tgbotapi.BotAPI, chatID, userID int64, args string) {
 		sendText(bot, chatID, "Invalid alias: "+err.Error())
 		return
 	}
-	mailboxAddr, local, err := resolveMailbox(fields[1])
+	mailbox := mailboxArg(fields)
+	if mailbox == "" {
+		sendText(bot, chatID, "No mailbox given and DEFAULT_MAILBOX is not set.\nUsage: /alias_add &lt;alias&gt; [mailbox]")
+		return
+	}
+	mailboxAddr, local, err := resolveMailbox(mailbox)
 	if err != nil {
 		sendText(bot, chatID, "Invalid mailbox: "+err.Error())
 		return
@@ -283,8 +297,8 @@ func aliasAdd(bot *tgbotapi.BotAPI, chatID, userID int64, args string) {
 
 func aliasDelete(bot *tgbotapi.BotAPI, chatID, userID int64, args string) {
 	fields := strings.Fields(args)
-	if len(fields) != 2 {
-		sendText(bot, chatID, "Usage: /alias_delete &lt;alias&gt; &lt;mailbox&gt;")
+	if len(fields) < 1 || len(fields) > 2 {
+		sendText(bot, chatID, "Usage: /alias_delete &lt;alias&gt; [mailbox]")
 		return
 	}
 
@@ -293,7 +307,12 @@ func aliasDelete(bot *tgbotapi.BotAPI, chatID, userID int64, args string) {
 		sendText(bot, chatID, "Invalid alias: "+err.Error())
 		return
 	}
-	mailboxAddr, _, err := resolveMailbox(fields[1])
+	mailbox := mailboxArg(fields)
+	if mailbox == "" {
+		sendText(bot, chatID, "No mailbox given and DEFAULT_MAILBOX is not set.\nUsage: /alias_delete &lt;alias&gt; [mailbox]")
+		return
+	}
+	mailboxAddr, _, err := resolveMailbox(mailbox)
 	if err != nil {
 		sendText(bot, chatID, "Invalid mailbox: "+err.Error())
 		return
@@ -330,7 +349,7 @@ func aliasDelete(bot *tgbotapi.BotAPI, chatID, userID int64, args string) {
 }
 
 func aliasList(bot *tgbotapi.BotAPI, chatID int64, args string) {
-	filter := strings.TrimSpace(args)
+	filter := listFilter(args)
 	if filter != "" {
 		var err error
 		if filter, err = normalizeFilter(filter); err != nil {
@@ -339,6 +358,20 @@ func aliasList(bot *tgbotapi.BotAPI, chatID int64, args string) {
 		}
 	}
 	renderAliases(bot, chatID, 0, 0, filter)
+}
+
+// listFilter returns the mailbox filter for /alias_list. "*" lists every alias
+// (an empty filter); an omitted mailbox falls back to the configured default;
+// anything else is used as-is.
+func listFilter(args string) string {
+	switch filter := strings.TrimSpace(args); filter {
+	case "*":
+		return ""
+	case "":
+		return cfg.defaultMailbox
+	default:
+		return filter
+	}
 }
 
 // renderAliases renders a single page of aliases, optionally filtered to those
@@ -567,6 +600,16 @@ func normalizeEmail(arg string) (string, error) {
 	return arg, nil
 }
 
+// mailboxArg returns the mailbox argument for /alias_add and /alias_delete: the
+// explicit second field when given, otherwise the configured default mailbox. It
+// returns an empty string when neither is available.
+func mailboxArg(fields []string) string {
+	if len(fields) == 2 {
+		return fields[1]
+	}
+	return cfg.defaultMailbox
+}
+
 // resolveMailbox turns a /alias_add or /alias_delete mailbox argument into a
 // full address. A bare local part means a mailbox on MAIL_DOMAIN (local=true);
 // a full address is used as-is, and local is true only when its domain is
@@ -655,9 +698,9 @@ func escape(s string) string {
 
 func registerCommands(bot *tgbotapi.BotAPI) error {
 	commands := []tgbotapi.BotCommand{
-		{Command: "alias_list", Description: "List all aliases, optionally for one mailbox"},
-		{Command: "alias_add", Description: "Add an alias: /alias_add <alias> <mailbox>"},
-		{Command: "alias_delete", Description: "Delete an alias: /alias_delete <alias> <mailbox>"},
+		{Command: "alias_list", Description: "List aliases: /alias_list [mailbox|*]"},
+		{Command: "alias_add", Description: "Add an alias: /alias_add <alias> [mailbox]"},
+		{Command: "alias_delete", Description: "Delete an alias: /alias_delete <alias> [mailbox]"},
 		{Command: "help", Description: "Show the available commands"},
 	}
 	_, err := bot.Request(tgbotapi.NewSetMyCommands(commands...))
@@ -669,13 +712,17 @@ func welcomeText() string {
 }
 
 func helpText() string {
+	defaultNote := ""
+	if cfg.defaultMailbox != "" {
+		defaultNote = fmt.Sprintf("&lt;mailbox&gt; defaults to <b>%s</b> when omitted.", escape(cfg.defaultMailbox))
+	}
 	return fmt.Sprintf(`<b>%s</b> — manage docker-mailserver aliases.
 
 Commands:
-/alias_list [mailbox] — list aliases, optionally only those for one mailbox
-/alias_add &lt;alias&gt; &lt;mailbox&gt; — create an alias → mailbox
-/alias_delete &lt;alias&gt; &lt;mailbox&gt; — remove an alias → mailbox mapping (asks for confirmation)
-
+/alias_list [mailbox|*] — list aliases for one mailbox (* lists all)
+/alias_add &lt;alias&gt; [mailbox] — create an alias → mailbox
+/alias_delete &lt;alias&gt; [mailbox] — remove an alias → mailbox mapping (asks for confirmation)
+%s
 &lt;mailbox&gt; is a local part (e.g. admin) or a full external address
 (e.g. someone@external.example).
 
@@ -685,6 +732,7 @@ Examples:
 /alias_delete support admin
 `,
 		appName,
+		defaultNote,
 		cfg.mailDomain,
 		cfg.mailDomain,
 	)
