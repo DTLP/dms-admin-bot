@@ -1,12 +1,13 @@
 services:
   # docker-socket-proxy sits between the bot and the host Docker socket and only
-  # forwards the API calls the bot needs (exec into existing containers), so a
-  # compromise of the bot can't create containers or touch other daemon state.
+  # forwards the API calls the bot needs. A compromised bot can still create
+  # containers from images on the host and exec into any container, so treat it
+  # as a host compromise. It cannot stop, start, restart, pause, or remove
+  # containers, nor touch images, networks, or volumes.
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
     container_name: docker-socket-proxy
     restart: unless-stopped
-    privileged: true
     environment:
       # /containers/* (needed for POST /containers/{id}/exec)
       CONTAINERS: "1"
